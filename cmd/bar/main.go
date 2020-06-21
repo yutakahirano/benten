@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 
-	"github.om/yutakahirano/benten/core"
+	"github.com/yutakahirano/benten"
 )
 
 func main() {
-	fmt.Printf("1 + 8 = %d\n", core.Bar(1))
+	fmt.Printf("1 + 8 = %d\n", benten.Bar(1))
 }

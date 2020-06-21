@@ -1,4 +1,4 @@
-module github.om/yutakahirano/benten
+module github.com/yutakahirano/benten
 
 go 1.14
 
