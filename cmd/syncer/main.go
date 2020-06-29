@@ -158,7 +158,7 @@ func sync(ch chan fsnotify.Event) {
 	for {
 		ev := <-ch
 
-		log.Printf("op: %v, name: %v\n", ev.Op, ev.Name)
+		logger.Printf("op: %v, name: %v\n", ev.Op, ev.Name)
 		switch ev.Op {
 		case fsnotify.Create:
 			file, err := os.Open(ev.Name)
@@ -167,12 +167,12 @@ func sync(ch chan fsnotify.Event) {
 			}
 			m, err := tag.ReadFrom(file)
 			if err != nil {
-				log.Printf("tag.ReadFrom: %v\n", err)
+				logger.Printf("Failed read tag from %s: %v\n", ev.Name, err)
 				continue
 			}
 			hash, err := tag.Sum(file)
 			if err != nil {
-				log.Printf("tag.Sum: %v\n", err)
+				logger.Printf("Failed calculate the sum from %s: %v\n", ev.Name, err)
 				continue
 			}
 
@@ -208,10 +208,10 @@ func sync(ch chan fsnotify.Event) {
 			value := benten.NewMetadata(m, pictureHash, hash, ev.Name)
 			_, err = datastoreClient.Put(ctx, key, &value)
 			if err != nil {
-				log.Printf("put: %v\n", err)
+				logger.Printf("Failed to put %v: %v\n", *key, err)
 				continue
 			}
-			log.Println("OK!")
+			logger.Printf("Successfully updated data for %s\n", ev.Name)
 
 		case fsnotify.Write:
 		case fsnotify.Remove:
