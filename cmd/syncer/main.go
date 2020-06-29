@@ -27,26 +27,6 @@ import (
 
 var logger *log.Logger
 
-func watch(watcher *fsnotify.Watcher) {
-	for {
-		select {
-		case event, ok := <-watcher.Events:
-			if !ok {
-				return
-			}
-			log.Println("event:", event)
-			if event.Op&fsnotify.Write == fsnotify.Write {
-				log.Println("modified file:", event.Name)
-			}
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Println("error:", err)
-		}
-	}
-}
-
 func addToWatcher(watcher *fsnotify.Watcher, path string, info os.FileInfo, err error) error {
 	if err != nil {
 		return err
@@ -237,41 +217,6 @@ func walk(path string, ch chan fsnotify.Event) {
 	})
 	if err != nil {
 		logger.Printf("Error during filepath.Wark: %v\n", err)
-	}
-}
-
-func get(name string) {
-	deadline := 5 * time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
-	defer cancel()
-
-	client, err := storage.NewClient(ctx)
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-	bucket := client.Bucket(bucketName)
-
-	object := bucket.Object(name)
-
-	reader, err := object.NewReader(ctx)
-
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-
-	bs := [4096]byte{}
-	for {
-		read, err := reader.Read(bs[:])
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Printf("Failed to read data from response: %v", err)
-			return
-		}
-		fmt.Print(bs[0:read])
 	}
 }
 
