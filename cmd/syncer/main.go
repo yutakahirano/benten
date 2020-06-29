@@ -169,7 +169,7 @@ func sync(ch chan fsnotify.Event) {
 					if picture != nil {
 						sum := sha256.Sum256(picture.Data)
 						pictureHash = base64.StdEncoding.EncodeToString(sum[:])
-						err = uploadPicture(ctx, bucket, pictureHash, m.Picture())
+						err = uploadPicture(ctx, bucket, pictureHash, picture)
 						if err == nil {
 							albumPictures[dirname] = pictureHash
 							albumPictures[pictureHash] = pictureHash
