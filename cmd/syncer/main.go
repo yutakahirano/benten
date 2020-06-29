@@ -67,26 +67,6 @@ func addToWatcherRecursively(watcher *fsnotify.Watcher, path string) error {
 var projectID string
 var bucketName string
 
-func upload(ch chan string) {
-	for {
-		path := <-ch
-		fmt.Println(path)
-
-		file, err := os.Open(path)
-		defer file.Close()
-		if err != nil {
-			continue
-		}
-		m, err := tag.ReadFrom(file)
-		if err != nil {
-			continue
-		}
-
-		_ = benten.NewMetadata(m, "", "", "")
-
-	}
-}
-
 // Uploads `picture` into `bucket`, with `key`.
 func uploadPicture(ctx context.Context, bucket *storage.BucketHandle, key string, picture *tag.Picture) error {
 	object := bucket.Object(key)
