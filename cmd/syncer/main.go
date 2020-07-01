@@ -19,6 +19,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/yutakahirano/benten"
+	"google.golang.org/api/iterator"
 
 	"cloud.google.com/go/datastore"
 	"cloud.google.com/go/storage"
@@ -51,12 +52,7 @@ var bucketName string
 func uploadPicture(ctx context.Context, bucket *storage.BucketHandle, key string, picture *tag.Picture) error {
 	object := bucket.Object(key)
 	writer := object.NewWriter(ctx)
-	_, err := object.Update(ctx, storage.ObjectAttrsToUpdate{ContentType: picture.MIMEType})
-	if err != nil {
-		logger.Printf("Failed to update object's attributes: %v\n", err)
-		return err
-	}
-	_, err = io.Copy(writer, bytes.NewBuffer(picture.Data))
+	_, err := io.Copy(writer, bytes.NewBuffer(picture.Data))
 	if err != nil {
 		logger.Printf("Failed to copy bytes: %v\n", err)
 		return err
@@ -64,6 +60,11 @@ func uploadPicture(ctx context.Context, bucket *storage.BucketHandle, key string
 	err = writer.Close()
 	if err != nil {
 		logger.Printf("Failed to close the writer: %v\n", err)
+		return err
+	}
+	_, err = object.Update(ctx, storage.ObjectAttrsToUpdate{ContentType: picture.MIMEType})
+	if err != nil {
+		logger.Printf("Failed to update object's attributes: %v\n", err)
 		return err
 	}
 	return err
@@ -116,7 +117,66 @@ func getAlbumArtFromDir(dir string) (*tag.Picture, error) {
 	}
 }
 
-func sync(ch chan fsnotify.Event) {
+func updateMetadata(ctx context.Context, client *datastore.Client, metadata *benten.Metadata) error {
+	tr, err := client.NewTransaction(ctx)
+	if err != nil {
+		logger.Printf("Failed to create a transaction: %v\n", err)
+		return err
+	}
+	defer tr.Rollback()
+
+	// Delete existing entries having the same content hash.
+	query := datastore.NewQuery(benten.PieceKind).Transaction(tr).Filter("Hash =", metadata.Hash)
+	t := client.Run(ctx, query)
+	for {
+		var existingKey *datastore.Key
+		existingKey, err = t.Next(nil)
+		if err != nil {
+			break
+		}
+		err = tr.Delete(existingKey)
+		if err != nil {
+			break
+		}
+	}
+	if err != iterator.Done {
+		logger.Printf("Failed to delete existing metadata: %v\n", err)
+		return err
+	}
+	// Delete existing entries having the same path.
+	query = datastore.NewQuery(benten.PieceKind).Transaction(tr).Filter("Path =", metadata.Path)
+	t = client.Run(ctx, query)
+	for {
+		var existingKey *datastore.Key
+		existingKey, err = t.Next(nil)
+		if err != nil {
+			break
+		}
+		err = tr.Delete(existingKey)
+		if err != nil {
+			break
+		}
+	}
+	if err != iterator.Done {
+		logger.Printf("Failed to delete existing metadata: %v\n", err)
+		return err
+	}
+
+	key := datastore.IncompleteKey(benten.PieceKind, nil)
+	_, err = tr.Put(key, metadata)
+	if err != nil {
+		logger.Printf("Failed to put %v: %v\n", *key, err)
+		return err
+	}
+	_, err = tr.Commit()
+	if err != nil {
+		logger.Printf("Failed to commit the transaction: %v\n", err)
+	}
+
+	return err
+}
+
+func syncInternal(ch chan string) {
 	// A collection of album pictures. Each of key is either
 	//  - the path of the dictionary that the album is contined, or
 	//  - the base64 encoded hash value of the bytes representing the album picture.
@@ -136,86 +196,120 @@ func sync(ch chan fsnotify.Event) {
 	}
 	bucket := client.Bucket(benten.AlbumPictureBucket)
 	for {
-		ev := <-ch
+		filename := <-ch
+		fi, err := os.Stat(filename)
+		if err != nil {
+			logger.Printf("Failed to get stat for %s: %v\n", filename, err)
+		}
+		if fi.IsDir() {
+			continue
+		}
 
-		logger.Printf("op: %v, name: %v\n", ev.Op, ev.Name)
-		switch ev.Op {
-		case fsnotify.Create:
-			file, err := os.Open(ev.Name)
-			if err != nil {
-				continue
-			}
-			m, err := tag.ReadFrom(file)
-			if err != nil {
-				logger.Printf("Failed read tag from %s: %v\n", ev.Name, err)
-				continue
-			}
-			hash, err := tag.Sum(file)
-			if err != nil {
-				logger.Printf("Failed calculate the sum from %s: %v\n", ev.Name, err)
-				continue
-			}
+		file, err := os.Open(filename)
+		if err != nil {
+			logger.Printf("Failed to open %s: %v\n", filename, err)
+			continue
+		}
+		defer file.Close()
 
-			pictureHash := ""
-			if m.Picture() == nil {
-				var ok bool
-				dirname := filepath.Dir(ev.Name)
-				pictureHash, ok = albumPictures[dirname]
-				if !ok {
-					picture, err := getAlbumArtFromDir(dirname)
-					if err != nil {
-						logger.Printf("Failed to get an album art in %v: %v", dirname, err)
-					}
-					if picture != nil {
-						sum := sha256.Sum256(picture.Data)
-						pictureHash = base64.StdEncoding.EncodeToString(sum[:])
-						err = uploadPicture(ctx, bucket, pictureHash, picture)
-						if err == nil {
-							albumPictures[dirname] = pictureHash
-							albumPictures[pictureHash] = pictureHash
-						}
-					}
+		logger.Printf("Processing %s...\n", file.Name())
+		m, err := tag.ReadFrom(file)
+		if err != nil {
+			logger.Printf("Failed read tag from %s: %v\n", file.Name(), err)
+			continue
+		}
+		hash, err := tag.Sum(file)
+		if err != nil {
+			logger.Printf("Failed calculate the sum from %s: %v\n", file.Name(), err)
+			continue
+		}
+
+		pictureHash := ""
+		if m.Picture() == nil {
+			var ok bool
+			dirname := filepath.Dir(file.Name())
+			pictureHash, ok = albumPictures[dirname]
+			if !ok {
+				picture, err := getAlbumArtFromDir(dirname)
+				if err != nil {
+					logger.Printf("Failed to get an album art in %v: %v", dirname, err)
 				}
-			}
-			if pictureHash == "" && m.Picture() != nil {
-				sum := sha256.Sum256(m.Picture().Data)
-				pictureHash = base64.StdEncoding.EncodeToString(sum[:])
-				_, ok := albumPictures[pictureHash]
-				if !ok {
-					err = uploadPicture(ctx, bucket, pictureHash, m.Picture())
+				if picture != nil {
+					sum := sha256.Sum256(picture.Data)
+					pictureHash = base64.StdEncoding.EncodeToString(sum[:])
+					err = uploadPicture(ctx, bucket, pictureHash, picture)
 					if err == nil {
+						albumPictures[dirname] = pictureHash
 						albumPictures[pictureHash] = pictureHash
 					}
 				}
 			}
-
-			key := datastore.IncompleteKey(benten.PieceKind, nil)
-			value := benten.NewMetadata(m, pictureHash, hash, ev.Name)
-			_, err = datastoreClient.Put(ctx, key, &value)
-			if err != nil {
-				logger.Printf("Failed to put %v: %v\n", *key, err)
-				continue
+		}
+		if pictureHash == "" && m.Picture() != nil {
+			sum := sha256.Sum256(m.Picture().Data)
+			pictureHash = base64.StdEncoding.EncodeToString(sum[:])
+			_, ok := albumPictures[pictureHash]
+			if !ok {
+				err = uploadPicture(ctx, bucket, pictureHash, m.Picture())
+				if err == nil {
+					albumPictures[pictureHash] = pictureHash
+				}
 			}
-			logger.Printf("Successfully updated data for %s\n", ev.Name)
+		}
 
-		case fsnotify.Write:
-		case fsnotify.Remove:
-		case fsnotify.Rename:
-		case fsnotify.Chmod:
-
+		metadata := benten.NewMetadata(m, pictureHash, hash, file.Name())
+		err = updateMetadata(ctx, datastoreClient, &metadata)
+		if err == nil {
+			logger.Printf("Successfully updated data for %s\n", file.Name())
 		}
 
 	}
 }
 
-func walk(path string, ch chan fsnotify.Event) {
+func sync(ch chan string) {
+	filenames := make(map[string]time.Time)
+	chInternal := make(chan string)
+
+	// We don't want to sync files that are being updated, so we wait for a while.
+	duration := time.Second * 5
+	isTimerActive := false
+
+	go syncInternal(chInternal)
+
+	for {
+		filename := <-ch
+		if filename == "" {
+			// This is called from the timer below.
+			isTimerActive = false
+			oldFilenames := filenames
+			filenames = make(map[string]time.Time)
+			for name, timestamp := range oldFilenames {
+				if time.Now().Sub(timestamp) >= duration {
+					chInternal <- name
+				} else {
+					filenames[name] = timestamp
+				}
+			}
+		} else {
+			filenames[filename] = time.Now()
+		}
+		if len(filenames) > 0 && !isTimerActive {
+			time.AfterFunc(duration*2, func() {
+				ch <- ""
+			})
+			isTimerActive = true
+		}
+	}
+}
+
+func walk(path string, ch chan string) {
 	err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if info.Mode().IsRegular() {
 			logger.Printf("Found: %v\n", path)
-			ch <- fsnotify.Event{Op: fsnotify.Create, Name: path}
+			ch <- path
 		}
 
 		return nil
@@ -297,7 +391,7 @@ func main() {
 		logger.Fatalf("Failed to create a Watcher: %v\n", err)
 	}
 
-	ch := make(chan fsnotify.Event)
+	ch := make(chan string)
 	go func() {
 		if full {
 			walk(config.Target, ch)
@@ -313,7 +407,9 @@ func main() {
 				if !ok {
 					continue
 				}
-				ch <- event
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					ch <- event.Name
+				}
 			case err, _ = <-watcher.Errors:
 				logger.Printf("%v\n", err)
 			}
