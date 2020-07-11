@@ -22,6 +22,7 @@ import (
 	"google.golang.org/api/iterator"
 
 	"cloud.google.com/go/datastore"
+	"cloud.google.com/go/pubsub"
 	"cloud.google.com/go/storage"
 	"github.com/dhowden/tag"
 )
@@ -47,6 +48,7 @@ func addToWatcherRecursively(watcher *fsnotify.Watcher, path string) error {
 
 var projectID string
 var bucketName string
+var subscriptionID string
 
 // Uploads `picture` into `bucket`, with `key`.
 func uploadPicture(ctx context.Context, bucket *storage.BucketHandle, key string, picture *tag.Picture) error {
@@ -302,6 +304,79 @@ func sync(ch chan string) {
 	}
 }
 
+func uploadPiece(ctx context.Context, bucket *storage.BucketHandle, key string, path string) error {
+	file, err := os.Open(path)
+	defer file.Close()
+	if err != nil {
+		logger.Printf("Failed to open %s: %v", path, err)
+		return err
+	}
+	object := bucket.Object(key)
+	writer := object.NewWriter(ctx)
+	defer writer.Close()
+	_, err = io.Copy(writer, file)
+	if err != nil {
+		logger.Printf("Failed to copy the contents of %s: %v", path, err)
+		return err
+	}
+	err = writer.Close()
+	if err != nil {
+		logger.Printf("Failed to copy the contents of %s: %v", path, err)
+	}
+	return err
+}
+
+func uploadContentsInternal(ctx context.Context, m *pubsub.Message) error {
+	type Entry = struct {
+		Path string
+		Key  string
+	}
+	var entries []Entry
+	err := json.Unmarshal(m.Data, &entries)
+	if err != nil {
+		logger.Printf("Failed to parse the notification message: %v", err)
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		logger.Printf("Failed to create a storage client: %v\n", err)
+		return err
+	}
+	bucket := client.Bucket(benten.PieceBucket)
+	for _, entry := range entries {
+		err := uploadPiece(ctx, bucket, entry.Key, entry.Path)
+		if err != nil {
+			return err
+		}
+		logger.Printf("Uploaded %s from %s", entry.Key, entry.Path)
+	}
+	return nil
+}
+
+func uploadContents() {
+	ctx := context.Background()
+	client, err := pubsub.NewClient(ctx, projectID)
+	if err != nil {
+		logger.Printf("Failed to create a pubsub client: %v", err)
+		return
+	}
+	sub := client.Subscription(subscriptionID)
+	for {
+		err := sub.Receive(ctx, func(ctx context.Context, m *pubsub.Message) {
+			err := uploadContentsInternal(ctx, m)
+			if err == nil {
+				m.Ack()
+			}
+		})
+		if err != nil {
+			logger.Printf("Failed to receive message: %v", err)
+		}
+	}
+}
+
 func walk(path string, ch chan string) {
 	err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -311,7 +386,6 @@ func walk(path string, ch chan string) {
 			logger.Printf("Found: %v\n", path)
 			ch <- path
 		}
-
 		return nil
 	})
 	if err != nil {
@@ -322,6 +396,7 @@ func walk(path string, ch chan string) {
 type config struct {
 	ProjectID         string
 	BucketName        string
+	SubscriptionID    string
 	LogFileName       string
 	ServiceAccountKey string
 	Target            string
@@ -384,12 +459,15 @@ func main() {
 
 	projectID = config.ProjectID
 	bucketName = config.BucketName
+	subscriptionID = config.SubscriptionID
 	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", config.ServiceAccountKey)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		logger.Fatalf("Failed to create a Watcher: %v\n", err)
 	}
+
+	go uploadContents()
 
 	ch := make(chan string)
 	go func() {

@@ -1,6 +1,7 @@
 {
     "ProjectID": "example-project-id",
     "BucketName": "example-bucket-name",
+    "SubscriptionID": "subscription-name",
     "LogFileName": "log",
     "ServiceAccountKey": "example-service-account-key",
     "Target": "./test-target"
