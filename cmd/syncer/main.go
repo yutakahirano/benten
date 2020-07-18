@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/yutakahirano/benten"
@@ -119,6 +120,117 @@ func getAlbumArtFromDir(dir string) (*tag.Picture, error) {
 	}
 }
 
+func generateWordsForIndex(text string, words *map[string]int) {
+	if len(text) < benten.GramSizeForAscii {
+		return
+	}
+	for i := 0; i < len(text)-benten.GramSizeForAscii; i++ {
+		isAscii := true
+		for j := 0; j <= benten.GramSizeForNonAscii; j++ {
+			if (j == benten.GramSizeForAscii && isAscii) ||
+				j == benten.GramSizeForNonAscii {
+				(*words)[text[i:i+j]] = 0
+				break
+			}
+			if i+j == len(text) {
+				break
+			}
+			isAscii = isAscii && text[i+j] <= unicode.MaxASCII
+		}
+	}
+}
+
+func spanPieceIndex(ctx context.Context, client *datastore.Client, metadata *benten.Metadata, key *datastore.Key) error {
+	words := make(map[string]int)
+	generateWordsForIndex(strings.ToLower(metadata.Title), &words)
+	generateWordsForIndex(strings.ToLower(metadata.Album), &words)
+	generateWordsForIndex(strings.ToLower(metadata.Artist), &words)
+	generateWordsForIndex(strings.ToLower(metadata.AlbumArtist), &words)
+	generateWordsForIndex(strings.ToLower(metadata.Composer), &words)
+
+	tr, err := client.NewTransaction(ctx)
+	if err != nil {
+		return err
+	}
+	defer tr.Rollback()
+
+	var entry benten.PieceIndex
+	entry.Value = key
+	for word, _ := range words {
+		entry.Key = []byte(word)
+		_, err := tr.Put(datastore.IncompleteKey(benten.PieceIndexKind, nil), &entry)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = tr.Commit()
+	return err
+}
+
+func clearIndex() error {
+	ctx := context.Background()
+	client, err := datastore.NewClient(ctx, projectID)
+	if err != nil {
+		return err
+	}
+
+	query := datastore.NewQuery(benten.PieceIndexKind)
+	iter := client.Run(ctx, query)
+	for {
+		key, err := iter.Next(nil)
+		if err != nil {
+			if err == iterator.Done {
+				return nil
+			}
+			return err
+		}
+		err = client.Delete(ctx, key)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func deleteIndexFor(ctx context.Context, client *datastore.Client, tr *datastore.Transaction, keys []*datastore.Key) error {
+	for key := range keys {
+		query := datastore.NewQuery(benten.PieceIndexKind).Transaction(tr).Filter("Value =", key)
+		t := client.Run(ctx, query)
+		for {
+			existingKey, err := t.Next(nil)
+			if err != nil {
+				if err == iterator.Done {
+					break
+				}
+				return err
+			}
+			err = tr.Delete(existingKey)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func deleteMatchedPieces(iter *datastore.Iterator, tr *datastore.Transaction) ([](*datastore.Key), error) {
+	deletedPieces := make([]*datastore.Key, 0)
+	for {
+		key, err := iter.Next(nil)
+		if err != nil {
+			if err == iterator.Done {
+				return deletedPieces, nil
+			}
+			return deletedPieces, err
+		}
+		err = tr.Delete(key)
+		if err != nil {
+			return deletedPieces, err
+		}
+		deletedPieces = append(deletedPieces, key)
+	}
+}
+
 func updateMetadata(ctx context.Context, client *datastore.Client, metadata *benten.Metadata) error {
 	tr, err := client.NewTransaction(ctx)
 	if err != nil {
@@ -129,52 +241,40 @@ func updateMetadata(ctx context.Context, client *datastore.Client, metadata *ben
 
 	// Delete existing entries having the same content hash.
 	query := datastore.NewQuery(benten.PieceKind).Transaction(tr).Filter("Hash =", metadata.Hash)
-	t := client.Run(ctx, query)
-	for {
-		var existingKey *datastore.Key
-		existingKey, err = t.Next(nil)
-		if err != nil {
-			break
-		}
-		err = tr.Delete(existingKey)
-		if err != nil {
-			break
-		}
-	}
-	if err != iterator.Done {
+	deletedPieces, err := deleteMatchedPieces(client.Run(ctx, query), tr)
+	if err != nil {
 		logger.Printf("Failed to delete existing metadata: %v\n", err)
 		return err
 	}
 	// Delete existing entries having the same path.
 	query = datastore.NewQuery(benten.PieceKind).Transaction(tr).Filter("Path =", metadata.Path)
-	t = client.Run(ctx, query)
-	for {
-		var existingKey *datastore.Key
-		existingKey, err = t.Next(nil)
-		if err != nil {
-			break
-		}
-		err = tr.Delete(existingKey)
-		if err != nil {
-			break
-		}
-	}
-	if err != iterator.Done {
+	deletedPieces2, err := deleteMatchedPieces(client.Run(ctx, query), tr)
+	if err != nil {
 		logger.Printf("Failed to delete existing metadata: %v\n", err)
 		return err
 	}
-
-	key := datastore.IncompleteKey(benten.PieceKind, nil)
-	_, err = tr.Put(key, metadata)
+	deletedPieces = append(deletedPieces, deletedPieces2...)
+	err = deleteIndexFor(ctx, client, tr, deletedPieces)
 	if err != nil {
-		logger.Printf("Failed to put %v: %v\n", *key, err)
 		return err
 	}
-	_, err = tr.Commit()
+
+	incompleteKey := datastore.IncompleteKey(benten.PieceKind, nil)
+	pendingKey, err := tr.Put(incompleteKey, metadata)
+	if err != nil {
+		logger.Printf("Failed to put %v: %v\n", *incompleteKey, err)
+		return err
+	}
+	commit, err := tr.Commit()
 	if err != nil {
 		logger.Printf("Failed to commit the transaction: %v\n", err)
 	}
 
+	err = spanPieceIndex(ctx, client, metadata, commit.Key(pendingKey))
+	if err != nil {
+		logger.Printf("Failed to update title index: %v", err)
+		return err
+	}
 	return err
 }
 
@@ -264,7 +364,6 @@ func syncInternal(ch chan string) {
 		if err == nil {
 			logger.Printf("Successfully updated data for %s\n", file.Name())
 		}
-
 	}
 }
 
@@ -429,9 +528,11 @@ func loadConfig(filename string) config {
 
 func main() {
 	var full bool
+	var clearIndexFlag bool
 	var configFileName string
 	flag.StringVar(&configFileName, "config", "", "config file name")
 	flag.BoolVar(&full, "full", false, "full")
+	flag.BoolVar(&clearIndexFlag, "clear-index", false, "clear index")
 
 	flag.Parse()
 
@@ -452,6 +553,8 @@ func main() {
 	}
 	logger = log.New(logFile, "", log.Ldate|log.Ltime|log.Lshortfile|log.LUTC|log.Lmsgprefix)
 
+	logger.Printf("\n")
+	logger.Printf("Starting up...\n")
 	logger.Printf("ProjectID = %s\n", config.ProjectID)
 	logger.Printf("BucketName = %s\n", config.BucketName)
 	logger.Printf("ServiceAccountKey = %s\n", config.ServiceAccountKey)
@@ -461,6 +564,16 @@ func main() {
 	bucketName = config.BucketName
 	subscriptionID = config.SubscriptionID
 	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", config.ServiceAccountKey)
+
+	if clearIndexFlag {
+		logger.Printf("Clearing index...\n")
+		err := clearIndex()
+		if err != nil {
+			logger.Printf("Failed to clear index: %v\n", err)
+		} else {
+			logger.Printf("Successfully cleared the index.\n")
+		}
+	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {

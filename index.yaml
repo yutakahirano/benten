@@ -1,0 +1,7 @@
+indexes:
+
+- kind: piece-index
+  ancestor: no
+  properties:
+  - name: Key
+  - name: Value

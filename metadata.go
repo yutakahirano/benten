@@ -1,6 +1,9 @@
 package benten
 
-import "github.com/dhowden/tag"
+import (
+	"cloud.google.com/go/datastore"
+	"github.com/dhowden/tag"
+)
 
 // Metadata epresents a metadata of an audio file. This is equivalent to tag.Metadata except for the following members:
 //  - Picture
@@ -71,4 +74,11 @@ func NewMetadata(src tag.Metadata, picture string, hash string, path string) Met
 	dest.Path = path
 
 	return dest
+}
+
+// PieceIndex is an entry of index from text in a Metadata to the key of the Metadata.
+type PieceIndex struct {
+	Key []byte
+
+	Value *datastore.Key
 }

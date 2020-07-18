@@ -1,3 +1,20 @@
 runtime: go112
 
-main: ./src
+main: ./cmd/gae
+
+handlers:
+- url: /
+  static_files: html/index.html
+  upload: html/.*
+
+- url: /html
+  static_dir: html
+
+- url: /js
+  static_dir: js
+
+- url: /style
+  static_dir: style
+
+- url: /api/.*
+  script: auto
