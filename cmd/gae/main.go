@@ -18,12 +18,6 @@ import (
 	"google.golang.org/api/iterator"
 )
 
-// Response hogefuga
-type Response struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-}
-
 func respond(w http.ResponseWriter, code int, message string) {
 	if code/100 != 2 {
 		log.Print(message)
@@ -161,19 +155,21 @@ func list(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(pieces)
 }
 
-func handle(writer http.ResponseWriter, request *http.Request) {
-	log.Printf("request: %s", request.URL)
+func handle(w http.ResponseWriter, r *http.Request) {
+	log.Printf("request: %s", r.URL)
 
-	if request.URL.Path == "/api/get" {
-		get(writer, request)
+	if r.URL.Path == "/api/get" {
+		get(w, r)
 		return
 	}
-	if request.URL.Path == "/api/list" {
-		list(writer, request)
+	if r.URL.Path == "/api/list" {
+		list(w, r)
 		return
 	}
 
-	json.NewEncoder(writer).Encode(Response{Status: "ok", Message: "Hello"})
+	w.WriteHeader(404)
+	w.Header().Add("content-type", "text/plain")
+	w.Write([]byte("Not Found"))
 }
 
 func main() {
