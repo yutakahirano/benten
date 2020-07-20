@@ -67,26 +67,9 @@ func get(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(200)
 	w.Header().Add("content-type", attrs.ContentType)
-
-	bs := [4096]byte{}
-	for {
-		read, err := reader.Read(bs[:])
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			log.Printf("Failed to read data from response: %v", err)
-			return
-		}
-		offset := 0
-		for offset < read {
-			written, err := w.Write(bs[offset:read])
-			if err != nil {
-				log.Printf("Failed to write data to response: %v", err)
-				return
-			}
-			offset += written
-		}
+	_, err = io.Copy(w, reader)
+	if err != nil {
+		log.Printf("Failed to write data to response: %v", err)
 	}
 }
 
