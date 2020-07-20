@@ -100,7 +100,7 @@ func list(w http.ResponseWriter, r *http.Request) {
 		limit, err = strconv.Atoi(limitString)
 
 		if err != nil {
-			respond(w, 400, fmt.Sprintf("limit (%v) is not a valid number", limitString)
+			respond(w, 400, fmt.Sprintf("limit (%v) is not a valid number", limitString))
 			return
 		}
 		if limit < 0 || limit > 1000*1000 {
@@ -109,7 +109,7 @@ func list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(search) < benten.GramSizeForAscii {
-		respond(w, 404, fmt.Sprintf("The query is too small"))
+		respond(w, 400, fmt.Sprintf("The query is too small"))
 		return
 	}
 	isASCII := true
