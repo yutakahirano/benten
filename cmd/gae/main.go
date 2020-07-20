@@ -18,6 +18,8 @@ import (
 	"google.golang.org/api/iterator"
 )
 
+var projectID string
+
 func respond(w http.ResponseWriter, code int, message string) {
 	if code/100 != 2 {
 		log.Print(message)
@@ -113,7 +115,7 @@ func list(w http.ResponseWriter, r *http.Request) {
 	deadline := 10 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
-	client, err := datastore.NewClient(ctx, "")
+	client, err := datastore.NewClient(ctx, projectID)
 	if err != nil {
 		respond(w, 500, fmt.Sprintf("Failed to create a datastore client: %v", err))
 		return
@@ -177,13 +179,8 @@ func main() {
 		handle(w, r)
 	})
 
-	datastoreProjectIDName := "DATASTORE_PROJECT_ID"
 	port := os.Getenv("PORT")
-	if os.Getenv(datastoreProjectIDName) == "" {
-		projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
-		log.Printf("%s is not set, so set it to %s\n", datastoreProjectIDName, projectID)
-		os.Setenv(datastoreProjectIDName, projectID)
-	}
+	projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
 
 	if port == "" {
 		port = "8080"
