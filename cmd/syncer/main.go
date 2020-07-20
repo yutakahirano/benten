@@ -125,9 +125,9 @@ func generateWordsForIndex(text string, words *map[string]int) {
 		return
 	}
 	for i := 0; i < len(text)-benten.GramSizeForAscii; i++ {
-		isAscii := true
+		isASCII := true
 		for j := 0; j <= benten.GramSizeForNonAscii; j++ {
-			if (j == benten.GramSizeForAscii && isAscii) ||
+			if (j == benten.GramSizeForAscii && isASCII) ||
 				j == benten.GramSizeForNonAscii {
 				(*words)[text[i:i+j]] = 0
 				break
@@ -135,7 +135,7 @@ func generateWordsForIndex(text string, words *map[string]int) {
 			if i+j == len(text) {
 				break
 			}
-			isAscii = isAscii && text[i+j] <= unicode.MaxASCII
+			isASCII = isASCII && text[i+j] <= unicode.MaxASCII
 		}
 	}
 }
@@ -156,7 +156,7 @@ func spanPieceIndex(ctx context.Context, client *datastore.Client, metadata *ben
 
 	var entry benten.PieceIndex
 	entry.Value = key
-	for word, _ := range words {
+	for word := range words {
 		entry.Key = []byte(word)
 		_, err := tr.Put(datastore.IncompleteKey(benten.PieceIndexKind, nil), &entry)
 		if err != nil {
