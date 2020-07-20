@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -92,7 +93,21 @@ func get(w http.ResponseWriter, r *http.Request) {
 func list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	search := strings.ToLower(q.Get("search"))
+	var err error
+	limit := 10
+	limitString := q.Get("limit")
+	if limitString != "" {
+		limit, err = strconv.Atoi(limitString)
 
+		if err != nil {
+			respond(w, 400, fmt.Sprintf("limit (%v) is not a valid number", limitString)
+			return
+		}
+		if limit < 0 || limit > 1000*1000 {
+			respond(w, 400, fmt.Sprintf("limit (%v) is out of range", limit))
+			return
+		}
+	}
 	if len(search) < benten.GramSizeForAscii {
 		respond(w, 404, fmt.Sprintf("The query is too small"))
 		return
@@ -121,7 +136,7 @@ func list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := datastore.NewQuery(benten.PieceIndexKind).Filter("Key =", bytes).Order("Value")
+	query := datastore.NewQuery(benten.PieceIndexKind).Filter("Key =", bytes).Order("Value").Limit(limit)
 	t := client.Run(ctx, query)
 	pieces := make([]benten.Metadata, 0)
 	var lastKey *datastore.Key = nil
