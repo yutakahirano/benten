@@ -75,7 +75,7 @@ func get(w http.ResponseWriter, r *http.Request) {
 
 func list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	search := strings.ToLower(q.Get("search"))
+	search := benten.Normalize(q.Get("search"))
 	var err error
 	limit := 10
 	limitString := q.Get("limit")

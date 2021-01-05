@@ -120,16 +120,16 @@ func getAlbumArtFromDir(dir string) (*tag.Picture, error) {
 	}
 }
 
-func generateWordsForIndex(text string, words *map[string]int) {
+func generateWordsForIndexInternal(text string, words *map[string]struct{}) {
 	if len(text) < benten.GramSizeForAscii {
 		return
 	}
-	for i := 0; i < len(text)-benten.GramSizeForAscii; i++ {
+	for i := 0; i <= len(text)-benten.GramSizeForAscii; i++ {
 		isASCII := true
 		for j := 0; j <= benten.GramSizeForNonAscii; j++ {
 			if (j == benten.GramSizeForAscii && isASCII) ||
 				j == benten.GramSizeForNonAscii {
-				(*words)[text[i:i+j]] = 0
+				(*words)[text[i:i+j]] = struct{}{}
 				break
 			}
 			if i+j == len(text) {
@@ -140,8 +140,12 @@ func generateWordsForIndex(text string, words *map[string]int) {
 	}
 }
 
+func generateWordsForIndex(text string, words *map[string]struct{}) {
+	generateWordsForIndexInternal(benten.Normalize(text), words)
+}
+
 func spanPieceIndex(ctx context.Context, client *datastore.Client, metadata *benten.Metadata, key *datastore.Key) error {
-	words := make(map[string]int)
+	words := make(map[string]struct{})
 	generateWordsForIndex(strings.ToLower(metadata.Title), &words)
 	generateWordsForIndex(strings.ToLower(metadata.Album), &words)
 	generateWordsForIndex(strings.ToLower(metadata.Artist), &words)
